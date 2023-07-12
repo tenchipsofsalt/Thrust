@@ -1,4 +1,15 @@
+mod bitboard;
 mod game;
+
+pub const DECK: [u32; 12] = [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3];
+const BIT_DECK: [u64; 12] = [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2];
+pub const BOARD_SIZE: usize = 4;
+pub const INITIAL_STEPS: usize = 9;
+
+pub const BONUS_ODDS: u32 = 21;
+pub const BONUS_DIV: u32 = 8;
+
+const INIT_HIGHEST: u32 = 96;
 fn main() {
     let mut threes: game::ThreesGame = game::init_threes_game();
     println!("{}", threes.board_string());
@@ -16,4 +27,6 @@ fn main() {
     println!("{}", threes.board_string());
     println!("{}", threes.deck_string());
     println!("{}", threes.calculate_score());
+
+    let mut threesBitBoad: bitboard::ThreesGameBitBoard = bitboard::init_threes_game_bitboard();
 }

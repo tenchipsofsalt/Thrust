@@ -1,17 +1,10 @@
+use crate::{BOARD_SIZE, BONUS_DIV, BONUS_ODDS, DECK, INITIAL_STEPS, INIT_HIGHEST};
+
 extern crate ndarray;
 
 use ndarray::Array2;
 use rand::{rngs::ThreadRng, seq::SliceRandom, thread_rng, Rng};
 use std::collections::VecDeque;
-
-const DECK: [u32; 12] = [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3];
-const BOARD_SIZE: usize = 4;
-const INITIAL_STEPS: usize = 9;
-
-const BONUS_ODDS: u32 = 21;
-const BONUS_DIV: u32 = 8;
-
-const INIT_HIGHEST: u32 = 96;
 
 pub struct ThreesGame {
     board: Array2<u32>,
