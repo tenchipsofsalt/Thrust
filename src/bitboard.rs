@@ -7,6 +7,11 @@ use std::collections::{HashMap, VecDeque};
 
 const BIT_BONUS_DIV: u64 = BONUS_DIV as u64;
 const MASK: u64 = 0b1111 as u64;
+const GROUP_MASK: [u64; 2] = [
+    0b1111111111111111,
+    0b1111000000000000111100000000000011110000000000001111,
+];
+const STRIDES: [usize; 2] = [4, 1];
 
 pub struct ThreesGameBitBoard {
     board: u64,
@@ -14,24 +19,24 @@ pub struct ThreesGameBitBoard {
     highest: u64,
     rng: ThreadRng,
     next: u32,
-    lookup_table: HashMap<u64, u64>,
+    lookup_table: [HashMap<u64, u64>; 2],
 }
 
 fn num_to_bit(num: u32) -> u64 {
     let num: u64 = num as u64;
     if num < 3 {
-        return num - 1;
+        return num;
     } else {
-        return (num / 3).trailing_zeros() as u64 + 2;
+        return (num / 3).trailing_zeros() as u64 + 3;
     }
 }
 
 fn bit_to_num(bit: u64) -> u32 {
     let bit = bit as u32;
-    if bit < 2 {
-        return bit + 1;
+    if bit < 3 {
+        return bit;
     } else {
-        return 2_u32.pow(bit - 2) * 3;
+        return 2_u32.pow(bit - 3) * 3;
     }
 }
 
@@ -42,15 +47,55 @@ fn new_deck(rng: &mut ThreadRng) -> VecDeque<u64> {
     return deck;
 }
 
-fn slide_row(row: u64) -> u64 {
-    // assume sliding inwards
-    let mut row: u64 = row;
-    let new: u64 = 0;
-    for _ in 0..BOARD_SIZE {
-        if MASK & row > 1 {
-            row
+fn reverse_row(row: u64, stride: usize) -> u64 {
+    if stride == STRIDES[0] {
+        return row.swap_bytes() >> 8;
+    } else {
+        let mut row: u64 = row;
+        let mut new: u64 = 0;
+        for i in 0..BOARD_SIZE {
+            new <<= 4;
+            new |= row & MASK;
+            row >>= 4;
         }
-        row >>= 4;
+        return new;
+    }
+}
+
+fn stride_row(row: u64, stride: usize) -> u64 {
+    let mut ret: u64 = 0;
+    let stride = stride - 1;
+    for i in 0..BOARD_SIZE {
+        ret |= (row & (MASK << 4 * i)) << (stride * i);
+    }
+    ret
+}
+
+fn slide_row(row: u64, stride: usize) -> u64 {
+    let mut mask: u64 = MASK;
+    let mut new: u64 = 0;
+    let mut prev: u64 = 16;
+    let mut inc: u64 = 1;
+    for _ in 0..BOARD_SIZE {
+        if prev == 0 {
+            new |= (mask & row) >> 4 * stride;
+        } else if mask & row > inc << 1 {
+            if prev == mask & row {
+                new |= prev + inc;
+            } else {
+                new |= mask & row;
+            }
+        } else {
+            if prev + (mask & row) == inc + (inc << 1) {
+                new |= inc + (inc << 1);
+            } else {
+                new |= mask & row;
+            }
+        }
+        prev = mask & new;
+        mask <<= 4 * stride;
+        prev <<= 4 * stride;
+        inc <<= 4 * stride;
     }
     new
 }
@@ -62,7 +107,8 @@ pub fn init_threes_game_bitboard() -> ThreesGameBitBoard {
     let mut rng = thread_rng();
     let mut deck: VecDeque<u64> = new_deck(&mut rng);
     let next: u32 = rng.gen_range(0..BONUS_ODDS);
-    let lookup_table: HashMap<u64, u64> = HashMap::new();
+    let mut fwd_lookup_table: HashMap<u64, u64> = HashMap::new();
+    let mut bwd_lookup_table: HashMap<u64, u64> = HashMap::new();
 
     // init board
     // first 4 bytes will be top left, first dim is rows second is cols
@@ -78,8 +124,21 @@ pub fn init_threes_game_bitboard() -> ThreesGameBitBoard {
     }
 
     // init hashmap LUT
-    for row in 0..((1 as u64) << (4 * BOARD_SIZE)) {
-        lookup_table.insert(row, res);
+    for stride in STRIDES {
+        for row in 0..((1 as u64) << (4 * BOARD_SIZE)) {
+            let strided: u64 = stride_row(row, stride);
+            let slided: u64 = slide_row(row, stride);
+            for shift in 0..4 {
+                fwd_lookup_table.insert(
+                    strided << (shift * 4 * (5 - stride)),
+                    slided << (shift * 4 * (5 - stride)),
+                );
+                bwd_lookup_table.insert(
+                    reverse_row(strided, stride) << (shift * 4 * (5 - stride)),
+                    reverse_row(slided, stride) << (shift * 4 * (5 - stride)),
+                );
+            }
+        }
     }
 
     return ThreesGameBitBoard {
@@ -88,13 +147,18 @@ pub fn init_threes_game_bitboard() -> ThreesGameBitBoard {
         highest: highest,
         rng: rng,
         next: next,
-        lookup_table: lookup_table,
+        lookup_table: [fwd_lookup_table, bwd_lookup_table],
     };
 }
 
 impl ThreesGameBitBoard {
     pub fn deck_string(&self) -> String {
-        return format!("{:?}", self.deck);
+        let mut str: String = String::new();
+        for card in &self.deck {
+            str.push_str(&format!("{} ", bit_to_num(*card)));
+        }
+        str.push('\n');
+        return str;
     }
 
     pub fn board_string(&self) -> String {
@@ -102,7 +166,7 @@ impl ThreesGameBitBoard {
         let mut str: String = String::new();
         for _ in 0..BOARD_SIZE {
             for __ in 0..BOARD_SIZE {
-                str.push_str(&format!("{}", MASK & board));
+                str.push_str(&format!("{} ", bit_to_num(MASK & board)));
                 board >>= 4;
             }
             str.push('\n');
@@ -144,8 +208,23 @@ impl ThreesGameBitBoard {
         card
     }
 
-    pub fn swipe(&mut self, dir: u32) {
+    pub fn swipe(&mut self, dir: usize) {
         // 0 is right, then clockwise 1/2/3
+        let mut new: u64 = 0;
+
+        for i in 0..BOARD_SIZE {
+            match self.lookup_table[(dir & 2) >> 1]
+                .get(&(self.board & (GROUP_MASK[dir & 1] << (STRIDES[dir & 1] * i * 4))))
+            {
+                Some(row) => {
+                    new |= row << (STRIDES[dir & 1] * i * 4);
+                    println!("FOUND ROW")
+                }
+                None => println!("NO ROW FOUND"),
+            }
+        }
+        // TODO: ADD CARD, BIT BONUS DIV
+        self.board = new;
     }
 
     pub fn calculate_score(&self) -> u32 {
@@ -153,7 +232,7 @@ impl ThreesGameBitBoard {
         let mut score: u32 = 0;
         for _ in 0..BOARD_SIZE {
             for __ in 0..BOARD_SIZE {
-                if board & MASK > 1 {
+                if board & MASK > 2 {
                     score += 3_u32.pow((board & MASK) as u32 - 1);
                 }
                 board >>= 4;
