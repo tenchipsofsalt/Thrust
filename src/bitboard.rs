@@ -5,13 +5,24 @@ extern crate ndarray;
 use rand::{rngs::ThreadRng, seq::SliceRandom, thread_rng, Rng};
 use std::collections::{HashMap, VecDeque};
 
-const BIT_BONUS_DIV: u64 = BONUS_DIV as u64;
-const MASK: u64 = 0b1111 as u64;
+const BIT_BONUS_SUB: u64 = BONUS_DIV.trailing_zeros() as u64;
+const SQ_BITS: usize = 4;
+const MASK: u64 = 2_u64.pow(SQ_BITS as u32) - 1;
 const GROUP_MASK: [u64; 2] = [
     0b1111111111111111,
     0b1111000000000000111100000000000011110000000000001111,
 ];
-const STRIDES: [usize; 2] = [4, 1];
+// 0 -> 3, 7, 11, 15
+// 1 -> 12 - 15
+// 2 -> 0, 4, 8, 12
+// 3 -> 0, 1, 2, 3
+const POSSIBLE_OPENINGS: [[usize; 4]; 4] = [
+    [3, 7, 11, 15],
+    [12, 13, 14, 15],
+    [0, 4, 8, 12],
+    [0, 1, 2, 3],
+];
+const STRIDES: [usize; 2] = [1, BOARD_SIZE];
 
 pub struct ThreesGameBitBoard {
     board: u64,
@@ -19,7 +30,7 @@ pub struct ThreesGameBitBoard {
     highest: u64,
     rng: ThreadRng,
     next: u32,
-    lookup_table: [HashMap<u64, u64>; 2],
+    lookup_table: [HashMap<u64, u64>; 4],
 }
 
 fn num_to_bit(num: u32) -> u64 {
@@ -48,15 +59,15 @@ fn new_deck(rng: &mut ThreadRng) -> VecDeque<u64> {
 }
 
 fn reverse_row(row: u64, stride: usize) -> u64 {
-    if stride == STRIDES[0] {
+    if stride == STRIDES[1] {
         return row.swap_bytes() >> 8;
     } else {
         let mut row: u64 = row;
         let mut new: u64 = 0;
-        for i in 0..BOARD_SIZE {
-            new <<= 4;
-            new |= row & MASK;
-            row >>= 4;
+        for _ in 0..BOARD_SIZE {
+            new <<= SQ_BITS;
+            new += row & MASK;
+            row >>= SQ_BITS;
         }
         return new;
     }
@@ -64,38 +75,38 @@ fn reverse_row(row: u64, stride: usize) -> u64 {
 
 fn stride_row(row: u64, stride: usize) -> u64 {
     let mut ret: u64 = 0;
-    let stride = stride - 1;
+    let stride: usize = stride - 1;
     for i in 0..BOARD_SIZE {
-        ret |= (row & (MASK << 4 * i)) << (stride * i);
+        ret += (row & (MASK << SQ_BITS * i)) << (stride * i * SQ_BITS);
     }
     ret
 }
 
 fn slide_row(row: u64, stride: usize) -> u64 {
     let mut mask: u64 = MASK;
-    let mut new: u64 = 0;
-    let mut prev: u64 = 16;
+    let mut new: u64 = mask & row;
+    let mut prev: u64 = new;
     let mut inc: u64 = 1;
-    for _ in 0..BOARD_SIZE {
+    for _ in 1..BOARD_SIZE {
+        mask <<= SQ_BITS * stride;
+        inc <<= SQ_BITS * stride;
+        prev <<= SQ_BITS * stride;
         if prev == 0 {
-            new |= (mask & row) >> 4 * stride;
+            new += (mask & row) >> SQ_BITS * stride;
         } else if mask & row > inc << 1 {
-            if prev == mask & row {
-                new |= prev + inc;
+            if prev == (mask & row) {
+                new += inc >> SQ_BITS * stride;
             } else {
-                new |= mask & row;
+                new += mask & row;
             }
         } else {
             if prev + (mask & row) == inc + (inc << 1) {
-                new |= inc + (inc << 1);
+                new += (mask & row) >> SQ_BITS * stride;
             } else {
-                new |= mask & row;
+                new += mask & row;
             }
         }
         prev = mask & new;
-        mask <<= 4 * stride;
-        prev <<= 4 * stride;
-        inc <<= 4 * stride;
     }
     new
 }
@@ -107,8 +118,12 @@ pub fn init_threes_game_bitboard() -> ThreesGameBitBoard {
     let mut rng = thread_rng();
     let mut deck: VecDeque<u64> = new_deck(&mut rng);
     let next: u32 = rng.gen_range(0..BONUS_ODDS);
-    let mut fwd_lookup_table: HashMap<u64, u64> = HashMap::new();
-    let mut bwd_lookup_table: HashMap<u64, u64> = HashMap::new();
+    let mut dir_lut: [HashMap<u64, u64>; 4] = [
+        HashMap::new(),
+        HashMap::new(),
+        HashMap::new(),
+        HashMap::new(),
+    ];
 
     // init board
     // first 4 bytes will be top left, first dim is rows second is cols
@@ -117,25 +132,26 @@ pub fn init_threes_game_bitboard() -> ThreesGameBitBoard {
         .choose_multiple(&mut rng, INITIAL_STEPS)
         .enumerate()
     {
-        board |= deck.pop_front().unwrap_or(0) << (4 * sq);
+        board += deck.pop_front().unwrap_or(0) << (SQ_BITS * sq);
         if deck.len() == 0 {
             deck = new_deck(&mut rng);
         }
     }
 
     // init hashmap LUT
-    for stride in STRIDES {
-        for row in 0..((1 as u64) << (4 * BOARD_SIZE)) {
-            let strided: u64 = stride_row(row, stride);
-            let slided: u64 = slide_row(row, stride);
+    for row in 0..((1 as u64) << (SQ_BITS * BOARD_SIZE)) {
+        for dir in 0..4 {
+            let stride = STRIDES[dir & 1];
+            let mut strided: u64 = stride_row(row, stride);
+            let mut slided: u64 = slide_row(strided, stride);
+            if dir > 1 {
+                strided = reverse_row(strided, stride);
+                slided = reverse_row(slided, stride);
+            }
             for shift in 0..4 {
-                fwd_lookup_table.insert(
-                    strided << (shift * 4 * (5 - stride)),
-                    slided << (shift * 4 * (5 - stride)),
-                );
-                bwd_lookup_table.insert(
-                    reverse_row(strided, stride) << (shift * 4 * (5 - stride)),
-                    reverse_row(slided, stride) << (shift * 4 * (5 - stride)),
+                dir_lut[dir].insert(
+                    strided << (shift * SQ_BITS * (BOARD_SIZE + 1 - stride)),
+                    slided << (shift * SQ_BITS * (BOARD_SIZE + 1 - stride)),
                 );
             }
         }
@@ -147,7 +163,7 @@ pub fn init_threes_game_bitboard() -> ThreesGameBitBoard {
         highest: highest,
         rng: rng,
         next: next,
-        lookup_table: [fwd_lookup_table, bwd_lookup_table],
+        lookup_table: dir_lut,
     };
 }
 
@@ -167,7 +183,7 @@ impl ThreesGameBitBoard {
         for _ in 0..BOARD_SIZE {
             for __ in 0..BOARD_SIZE {
                 str.push_str(&format!("{} ", bit_to_num(MASK & board)));
-                board >>= 4;
+                board >>= SQ_BITS;
             }
             str.push('\n');
         }
@@ -180,9 +196,9 @@ impl ThreesGameBitBoard {
 
     pub fn current_bonus_values(&self) -> [u64; 3] {
         return [
-            self.highest / BIT_BONUS_DIV,
-            self.highest / BIT_BONUS_DIV / 2,
-            self.highest / BIT_BONUS_DIV / 4,
+            self.highest - BIT_BONUS_SUB,
+            self.highest - BIT_BONUS_SUB - 1,
+            self.highest - BIT_BONUS_SUB - 2,
         ];
     }
 
@@ -190,14 +206,10 @@ impl ThreesGameBitBoard {
         let card: u64;
 
         if self.next == 0 {
-            let bonuses: [u64; 3] = [
-                self.highest / BIT_BONUS_DIV,
-                self.highest / BIT_BONUS_DIV / 2,
-                self.highest / BIT_BONUS_DIV / 4,
-            ];
+            let bonuses: [u64; 3] = self.current_bonus_values();
             card = *bonuses
                 .choose(&mut self.rng)
-                .unwrap_or(&(self.highest / BIT_BONUS_DIV));
+                .unwrap_or(&(self.highest - BIT_BONUS_SUB));
         } else {
             if self.deck.len() == 0 {
                 self.deck = new_deck(&mut self.rng);
@@ -211,20 +223,33 @@ impl ThreesGameBitBoard {
     pub fn swipe(&mut self, dir: usize) {
         // 0 is right, then clockwise 1/2/3
         let mut new: u64 = 0;
-
         for i in 0..BOARD_SIZE {
-            match self.lookup_table[(dir & 2) >> 1]
-                .get(&(self.board & (GROUP_MASK[dir & 1] << (STRIDES[dir & 1] * i * 4))))
-            {
+            match self.lookup_table[dir].get(
+                &(self.board
+                    & (GROUP_MASK[dir & 1] << ((BOARD_SIZE + 1 - STRIDES[dir & 1]) * i * SQ_BITS))),
+            ) {
                 Some(row) => {
-                    new |= row << (STRIDES[dir & 1] * i * 4);
-                    println!("FOUND ROW")
+                    new += row;
                 }
-                None => println!("NO ROW FOUND"),
+                None => panic!("Row not found!"),
             }
         }
-        // TODO: ADD CARD, BIT BONUS DIV
-        self.board = new;
+
+        // add card if changed
+        if self.board != new {
+            let mut open: [usize; 4] = [0; 4];
+            let mut idx = 0;
+            for end in POSSIBLE_OPENINGS[dir] {
+                if new & (MASK << (end * SQ_BITS)) == 0 {
+                    open[idx] = end;
+                    idx += 1;
+                }
+            }
+            new +=
+                self.draw_card() << (*open[0..idx].choose(&mut self.rng).unwrap_or(&0) * SQ_BITS);
+            self.board = new;
+            // update highest
+        }
     }
 
     pub fn calculate_score(&self) -> u32 {
@@ -232,10 +257,10 @@ impl ThreesGameBitBoard {
         let mut score: u32 = 0;
         for _ in 0..BOARD_SIZE {
             for __ in 0..BOARD_SIZE {
-                if board & MASK > 2 {
-                    score += 3_u32.pow((board & MASK) as u32 - 1);
+                if board & MASK > 3 {
+                    score += 3_u32.pow((board & MASK) as u32 - 2);
                 }
-                board >>= 4;
+                board >>= SQ_BITS;
             }
         }
         return score;
