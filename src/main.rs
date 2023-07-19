@@ -21,11 +21,14 @@ fn print_game_status(game: &ThreesGameBitBoard, window: &pancurses::Window) {
     window.printw("Welcome to Threes! Press any char to quit, and arrow keys to play!\n");
     window.printw(format!("{}", game.board_string()));
     if game.next_is_bonus() {
-        window.printw(format!("{:?}\n", game.current_bonus_values()));
+        window.printw(format!("Next: {:?}\n", game.current_bonus_values()));
     } else {
-        window.printw(format!("{}\n", game.deck_string().chars().next().unwrap()));
+        window.printw(format!(
+            "Next: {}\n",
+            game.deck_string().chars().next().unwrap()
+        ));
     }
-    window.printw(format!("{}", game.calculate_score()));
+    window.printw(format!("Score: {}", game.calculate_score()));
     window.refresh();
 }
 fn main() {
