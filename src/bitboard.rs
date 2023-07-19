@@ -173,6 +173,7 @@ impl ThreesGameBitBoard {
         for card in &self.deck {
             str.push_str(&format!("{} ", bit_to_num(*card)));
         }
+        str.push(' ');
         str.push('\n');
         return str;
     }
@@ -194,7 +195,11 @@ impl ThreesGameBitBoard {
         return self.next == 0;
     }
 
-    pub fn current_bonus_values(&self) -> [u64; 3] {
+    pub fn current_bonus_values(&self) -> [u32; 3] {
+        return self.current_bonus_bits().map(bit_to_num);
+    }
+
+    pub fn current_bonus_bits(&self) -> [u64; 3] {
         return [
             self.highest - BIT_BONUS_SUB,
             self.highest - BIT_BONUS_SUB - 1,
@@ -206,17 +211,17 @@ impl ThreesGameBitBoard {
         let card: u64;
 
         if self.next == 0 {
-            let bonuses: [u64; 3] = self.current_bonus_values();
+            let bonuses: [u64; 3] = self.current_bonus_bits();
             card = *bonuses
                 .choose(&mut self.rng)
                 .unwrap_or(&(self.highest - BIT_BONUS_SUB));
         } else {
-            if self.deck.len() == 0 {
-                self.deck = new_deck(&mut self.rng);
-            }
             card = self.deck.pop_front().unwrap_or(3);
         }
         self.next = self.rng.gen_range(0..BONUS_ODDS);
+        if self.deck.len() == 0 {
+            self.deck = new_deck(&mut self.rng);
+        }
         card
     }
 
