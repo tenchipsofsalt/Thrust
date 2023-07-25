@@ -1,7 +1,5 @@
 use crate::{BIT_DECK, BOARD_SIZE, BONUS_DIV, BONUS_ODDS, INITIAL_STEPS, INIT_HIGHEST};
 
-extern crate ndarray;
-
 use rand::{rngs::ThreadRng, seq::SliceRandom, thread_rng, Rng};
 use std::collections::{HashMap, VecDeque};
 

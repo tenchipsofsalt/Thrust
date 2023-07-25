@@ -1,5 +1,4 @@
 mod bitboard;
-mod game;
 
 extern crate pancurses;
 
